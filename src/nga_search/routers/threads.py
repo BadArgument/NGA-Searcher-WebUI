@@ -62,7 +62,7 @@ async def api_thread_posts(tid: int, page: int = 1):
         if not local or all(p.floor == 0 for p in local):
             crawler = Crawler()
             try:
-                data = crawler.get_posts(tid, page)
+                data = await crawler.get_posts(tid, page)
                 raw = data["posts"]
                 total = data.get("total", 0)
                 expect_start = (page - 1) * per_page
@@ -102,7 +102,7 @@ async def api_thread_refresh(tid: int):
     crawler = Crawler()
     try:
         try:
-            data = crawler.get_posts(tid, 1)
+            data = await crawler.get_posts(tid, 1)
             posts = data["posts"]
             fetched = 0
             if posts:

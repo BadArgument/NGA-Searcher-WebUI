@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 import threading
 import webbrowser
@@ -40,7 +41,7 @@ def main():
             print("[启动] 初始化版面列表...")
             indexer = Indexer(store)
             try:
-                n = indexer.discover_boards()
+                n = asyncio.run(indexer.discover_boards())
                 print(f"[启动] 发现 {n} 个版面")
             except AuthError:
                 print("[ERR] Cookie 已过期，请更新 AUTH 文件", file=sys.stderr)

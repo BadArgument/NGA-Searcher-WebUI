@@ -1,8 +1,8 @@
 """索引协调：爬取 + 写入 + 增量更新。"""
 from __future__ import annotations
 
+import asyncio
 import logging
-import time
 
 from .crawler import Crawler
 from .models import STATE_FIRST, STATE_FULL, STATE_META
@@ -19,22 +19,20 @@ class Indexer:
         self.crawler = crawler or Crawler()
 
     # ---------- 版面发现 ----------
-    def discover_boards(self) -> int:
-        """从 NGA 获取全部版面列表并写入数据库。返回版面数。"""
-        boards = self.crawler.get_boards()
+    async def discover_boards(self) -> int:
+        boards = await self.crawler.get_boards()
         if boards:
             self.store.upsert_boards(boards)
         return len(boards)
 
     # ---------- 索引版面 ----------
-    def index_board(self, fid: int, progress_cb=None) -> dict:
-        """索引指定版面的全部主题（Phase 1 元数据）。"""
-        total_pages = self.crawler.get_total_pages(fid)
+    async def index_board(self, fid: int, progress_cb=None) -> dict:
+        total_pages = await self.crawler.get_total_pages(fid)
 
         total_threads = 0
         for page in range(1, total_pages + 1):
             try:
-                data = self.crawler.get_threads(fid, page)
+                data = await self.crawler.get_threads(fid, page)
                 threads = data["threads"]
                 if threads:
                     thread_dicts = [{
@@ -51,14 +49,13 @@ class Indexer:
             except Exception as e:
                 log.warning("版面 %s 第 %s 页失败: %s", fid, page, e)
                 break
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
         return {"fid": fid, "pages": total_pages, "threads": total_threads}
 
     # ---------- 索引帖子 ----------
-    def index_thread(self, tid: int, full: bool = True) -> dict:
-        """抓取帖子内容。"""
-        data = self.crawler.get_posts(tid, 1)
+    async def index_thread(self, tid: int, full: bool = True) -> dict:
+        data = await self.crawler.get_posts(tid, 1)
         posts = data["posts"]
         if not posts:
             return {"tid": tid, "posts": 0, "full": False}
@@ -67,32 +64,31 @@ class Indexer:
         state = STATE_FIRST
 
         if full:
-            total_pages = self.crawler.get_post_total_pages(tid)
+            total_pages = await self.crawler.get_post_total_pages(tid)
             for page in range(2, total_pages + 1):
                 try:
-                    more = self.crawler.get_posts(tid, page)
+                    more = await self.crawler.get_posts(tid, page)
                     if more["posts"]:
                         self.store.upsert_posts(more["posts"])
                 except Exception as e:
                     log.warning("帖子 %s 第 %s 页失败: %s", tid, page, e)
-                time.sleep(0.3)
+                await asyncio.sleep(0.3)
             state = STATE_FULL
 
         self.store.set_thread_fetch_state(tid, state)
         return {"tid": tid, "posts": len(posts), "full": full}
 
-    def update_all(self, progress_cb=None) -> dict:
-        """增量更新全部已索引版面。"""
+    async def update_all(self, progress_cb=None) -> dict:
         boards = self.store.get_boards()
         if not boards:
-            self.discover_boards()
+            await self.discover_boards()
             boards = self.store.get_boards()
 
         changed = 0
         total = len(boards)
         for i, b in enumerate(boards):
             try:
-                data = self.crawler.get_threads(b.fid, 1)
+                data = await self.crawler.get_threads(b.fid, 1)
                 threads = data["threads"]
                 if not threads:
                     continue
@@ -116,6 +112,6 @@ class Indexer:
                     progress_cb(b.fid, i + 1, total)
             except Exception as e:
                 log.warning("增量更新版面 %s 失败: %s", b.fid, e)
-            time.sleep(0.3)
+            await asyncio.sleep(0.3)
 
         return {"boards_checked": total, "threads_changed": changed}

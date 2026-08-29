@@ -51,7 +51,7 @@ async def api_boards_fetch():
     store = Store()
     try:
         try:
-            boards = crawler.get_boards()
+            boards = await crawler.get_boards()
             store.upsert_boards(boards)
             return JSONResponse({"ok": True, "count": len(boards)})
         except Exception:
@@ -64,7 +64,7 @@ async def api_boards_fetch():
 async def api_board_detail(fid: int, page: int = 1, sort: str = "time", stid: int = 0):
     crawler = Crawler()
     try:
-        data = crawler.get_threads(fid, page, stid=stid)
+        data = await crawler.get_threads(fid, page, stid=stid)
     except Exception:
         raise HTTPException(500, "版面数据获取失败，请稍后重试")
     return JSONResponse({

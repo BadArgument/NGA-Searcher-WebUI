@@ -34,7 +34,7 @@ async def api_search(request: Request, body: SearchRequest):
             limit=body.limit,
             offset=body.offset,
         )
-        results = query.search(params)
+        results = await query.search(params)
 
         # 查询任务状态
         total = len(results)

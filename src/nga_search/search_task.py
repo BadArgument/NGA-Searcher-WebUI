@@ -1,10 +1,9 @@
 """后台搜索任务管理器：跨请求并行爬取，动态更新 DB。"""
 from __future__ import annotations
 
+import asyncio
 import json
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from .crawler import Crawler
 from .models import SearchResult
@@ -24,26 +23,25 @@ def _get_shared_crawler() -> Crawler:
 def _make_key(groups: list[dict]) -> str:
     """生成搜索任务唯一键。"""
     payload = json.dumps(groups, sort_keys=True, ensure_ascii=False, default=str)
-    return payload  # 用 JSON 直接当 key，简单可靠
+    return payload
 
 
 class SearchTask:
-    """一个搜索任务：并行爬取 NGA 多页，写入 DB，收集结果。"""
+    """一个搜索任务：异步并行爬取 NGA 多页，写入 DB，收集结果。"""
 
     def __init__(self, key: str, groups: list[dict]):
         self.key = key
         self.groups = groups
         self.crawler = _get_shared_crawler()
         self._results: list[SearchResult] = []
-        self._lock = threading.Lock()
-        self._executor = ThreadPoolExecutor(max_workers=4)
         self._running = False
-        self._done = threading.Event()
+        self._done = asyncio.Event()
         self._total_pages = 0
         self._pages_fetched = 0
         self._started_at = time.time()
+        self._bg_tasks: list[asyncio.Task] = []
 
-    def start(self):
+    async def start(self):
         """启动后台爬取。首页同步抓取，剩余页并行。"""
         if self._running:
             return
@@ -57,7 +55,7 @@ class SearchTask:
             stid = g.get("stid")
 
             # 首页同步抓取
-            data1 = self._fetch_page(g, match_kw, fid, stid, 1)
+            data1 = await self._fetch_page(g, match_kw, fid, stid, 1)
             if not data1 or not data1.get("threads"):
                 continue
 
@@ -78,40 +76,40 @@ class SearchTask:
             # 并行抓取剩余页
             self._pages_fetched = 1
             for page in range(2, self._total_pages + 1):
-                self._executor.submit(self._crawl_page, g, match_kw, fid, stid, page)
+                t = asyncio.create_task(
+                    self._crawl_page(g, match_kw, fid, stid, page))
+                self._bg_tasks.append(t)
 
             # 只处理第一个匹配组
             break
 
-    def _fetch_page(self, g: dict, match_kw: str, fid, stid, page: int) -> dict | None:
+    async def _fetch_page(self, g: dict, match_kw: str, fid, stid, page: int) -> dict | None:
         try:
             if fid or stid:
-                return self.crawler.search(
+                return await self.crawler.search(
                     int(fid) if fid else 0, match_kw, page,
                     stid=int(stid) if stid else 0,
                 )
             else:
-                return self.crawler.global_search(match_kw, page)
+                return await self.crawler.global_search(match_kw, page)
         except Exception:
             return None
 
-    def _crawl_page(self, g: dict, match_kw: str, fid, stid, page: int):
-        """在后台线程中抓取一页。"""
+    async def _crawl_page(self, g: dict, match_kw: str, fid, stid, page: int):
+        """在后台任务中抓取一页。"""
         try:
-            data = self._fetch_page(g, match_kw, fid, stid, page)
+            data = await self._fetch_page(g, match_kw, fid, stid, page)
             if data and data.get("threads"):
                 self._store_and_collect(data["threads"])
         except Exception:
             pass
         finally:
-            with self._lock:
-                self._pages_fetched += 1
-                if self._pages_fetched >= self._total_pages:
-                    self._done.set()
+            self._pages_fetched += 1
+            if self._pages_fetched >= self._total_pages:
+                self._done.set()
 
     def _store_and_collect(self, threads: list):
         """写入 DB 并收集结果。"""
-        # 写入 DB（独立连接，线程安全）
         try:
             store = Store(DB_PATH)
             try:
@@ -128,25 +126,21 @@ class SearchTask:
         except Exception:
             pass
 
-        # 收集结果
-        with self._lock:
-            for t in threads:
-                self._results.append(SearchResult(
-                    tid=t.tid, pid=t.tid, fid=t.fid, fname="",
-                    authorid=t.authorid, author=t.author,
-                    subject=t.subject, snippet=_snippet(t.subject),
-                    post_time=t.post_time, reply_count=t.reply_count,
-                    floor=0, is_topic=1,
-                    url=f"https://bbs.nga.cn/read.php?tid={t.tid}",
-                ))
+        for t in threads:
+            self._results.append(SearchResult(
+                tid=t.tid, pid=t.tid, fid=t.fid, fname="",
+                authorid=t.authorid, author=t.author,
+                subject=t.subject, snippet=_snippet(t.subject),
+                post_time=t.post_time, reply_count=t.reply_count,
+                floor=0, is_topic=1,
+                url=f"https://bbs.nga.cn/read.php?tid={t.tid}",
+            ))
 
     def get_results(self, offset: int, limit: int) -> list[SearchResult]:
-        with self._lock:
-            return self._results[offset:offset + limit]
+        return self._results[offset:offset + limit]
 
     def total_collected(self) -> int:
-        with self._lock:
-            return len(self._results)
+        return len(self._results)
 
     def is_done(self) -> bool:
         return self._done.is_set()
@@ -157,8 +151,7 @@ class SearchTask:
 
     @property
     def pages_fetched(self) -> int:
-        with self._lock:
-            return self._pages_fetched
+        return self._pages_fetched
 
     @property
     def age(self) -> float:
@@ -169,7 +162,6 @@ class SearchTaskManager:
     """全局搜索任务管理器（单例）。"""
 
     _instance: SearchTaskManager | None = None
-    _lock = threading.Lock()
 
     def __init__(self):
         self._tasks: dict[str, SearchTask] = {}
@@ -177,19 +169,16 @@ class SearchTaskManager:
     @classmethod
     def get(cls) -> SearchTaskManager:
         if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls()
+            cls._instance = cls()
         return cls._instance
 
-    def get_or_start(self, groups: list[dict]) -> SearchTask:
+    async def get_or_start(self, groups: list[dict]) -> SearchTask:
         key = _make_key(groups)
-        # 清理过期任务（> 5 分钟）
         self._cleanup()
         if key not in self._tasks:
             task = SearchTask(key, groups)
             self._tasks[key] = task
-            task.start()
+            await task.start()
         return self._tasks[key]
 
     def get_task(self, groups: list[dict]) -> SearchTask | None:
@@ -198,7 +187,6 @@ class SearchTaskManager:
         return self._tasks.get(key)
 
     def _cleanup(self):
-        """清理超过 5 分钟的过期任务。"""
         now = time.time()
         expired = [k for k, t in self._tasks.items() if t.age > 300]
         for k in expired:

@@ -85,7 +85,7 @@ async def thread_page(request: Request, tid: int):
         if not thread:
             crawler = Crawler()
             try:
-                data = crawler.get_posts(tid, 1)
+                data = await crawler.get_posts(tid, 1)
                 tinfo = data.get("thread_info", {})
                 if tinfo:
                     thread = Thread(
@@ -138,7 +138,7 @@ async def board_page(request: Request, fid: int, page: int = 1, stid: int = 0):
         stale = False
 
         try:
-            data = crawler.get_threads(fid, page, stid=stid)
+            data = await crawler.get_threads(fid, page, stid=stid)
             threads = data["threads"]
             forum = data["forum"]
             sub_forums = data.get("sub_forums", [])
