@@ -9,6 +9,8 @@ from .models import SearchParams, SearchResult
 from .search_task import SearchTaskManager
 from .store import Store, _snippet
 
+PER_PAGE_EST = 20  # NGA 搜索 API 每页结果数
+
 
 class Query:
     def __init__(self, store: Store, crawler: Crawler | None = None):
@@ -21,22 +23,9 @@ class Query:
 
         if params.source == "online":
             task_mgr = SearchTaskManager.get()
-
-            has_post_mode = any(
-                g.get("search_mode") == "post" for g in groups if isinstance(g, dict)
-            )
-            if not has_post_mode:
-                if params.offset == 0:
-                    task = await task_mgr.get_or_start(groups)
-                    return task.get_results(0, params.limit)
-
-                task = task_mgr.get_task(groups)
-                if task:
-                    return task.get_results(params.offset, params.limit)
-
-            online_results = await self._crawl_groups(groups, params.limit, params.offset)
-            if online_results is not None:
-                return online_results
+            task = await task_mgr.get_or_start(groups)
+            results = task.get_results(params.offset, params.limit)
+            return results
 
         results = self.store.grouped_search(
             groups, params.sort,
@@ -70,6 +59,7 @@ class Query:
 
     async def _crawl_groups(self, groups: list[dict], limit: int = 50,
                             offset: int = 0) -> list[SearchResult] | None:
+        """任务过期时的回退路径：按需抓取，不拉全量。"""
         all_results: list[SearchResult] = []
         need = offset + limit
 
@@ -83,9 +73,11 @@ class Query:
 
             try:
                 if search_mode == "post":
-                    await self._crawl_posts_pages(g, match_kw, fid, stid, need, all_results)
+                    await self._crawl_posts_pages(
+                        g, match_kw, fid, stid, need, all_results, offset)
                 else:
-                    await self._crawl_thread_pages(g, match_kw, fid, stid, need, all_results)
+                    await self._crawl_thread_pages(
+                        g, match_kw, fid, stid, need, all_results, offset)
             except Exception:
                 continue
 
@@ -94,30 +86,35 @@ class Query:
         return all_results[offset:offset + limit]
 
     async def _crawl_thread_pages(self, g: dict, match_kw: str, fid, stid, limit: int,
-                                  all_results: list[SearchResult]):
-        """并发抓取多页主题搜索结果。"""
-        # 首页先抓取，获取 total 和 per_page
-        data1 = await self._fetch_search_page(g, match_kw, fid, stid, 1, "thread")
+                                  all_results: list[SearchResult], offset: int = 0):
+        """按需抓取主题搜索结果。只抓取包含所需结果的最少页数。"""
+        start_page = max(1, (offset // PER_PAGE_EST) + 1)
+
+        data1 = await self._fetch_search_page(g, match_kw, fid, stid, start_page, "thread")
         if not data1 or not data1.get("threads"):
             return
 
-        threads1 = data1["threads"]
-        self._store_threads(threads1)
-        self._collect_threads(threads1, all_results)
+        threads = data1["threads"]
+        self._store_threads(threads)
+        self._collect_threads(threads, all_results)
 
+        if len(all_results) >= limit:
+            return
+
+        # 按需计算剩余页数
+        per_page = len(threads)
+        remaining = limit - len(all_results)
+        pages_needed = (remaining + per_page - 1) // per_page
         total = data1.get("total", 0)
-        per_page = len(threads1)
-        if total <= per_page or len(all_results) >= limit:
+        max_page = min(20, (total + per_page - 1) // per_page) if total > 0 else 20
+        last_page = min(start_page + pages_needed, max_page)
+
+        if last_page <= start_page:
             return
 
-        total_pages = min(20, (total + per_page - 1) // per_page)
-        if total_pages <= 1:
-            return
-
-        # 并发抓取剩余页
         tasks = [
             self._fetch_search_page(g, match_kw, fid, stid, p, "thread")
-            for p in range(2, total_pages + 1)
+            for p in range(start_page + 1, last_page + 1)
         ]
         pages = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -131,25 +128,34 @@ class Query:
                 break
 
     async def _crawl_posts_pages(self, g: dict, match_kw: str, fid, stid, limit: int,
-                                 all_results: list[SearchResult]):
-        """并发抓取多页回复搜索结果。"""
-        data1 = await self._fetch_search_page(g, match_kw, fid, stid, 1, "post")
+                                 all_results: list[SearchResult], offset: int = 0):
+        """按需抓取回复搜索结果。"""
+        start_page = max(1, (offset // PER_PAGE_EST) + 1)
+
+        data1 = await self._fetch_search_page(g, match_kw, fid, stid, start_page, "post")
         if not data1:
             return
 
         self._store_and_collect_posts(data1, all_results)
-        total = data1.get("total", 0)
-        per_page = len(data1.get("posts") or data1.get("threads") or [])
-        if total <= per_page or len(all_results) >= limit:
+
+        if len(all_results) >= limit:
             return
 
-        total_pages = min(20, (total + per_page - 1) // per_page)
-        if total_pages <= 1:
+        per_page = len(data1.get("posts") or data1.get("threads") or [])
+        if per_page == 0:
+            return
+        remaining = limit - len(all_results)
+        pages_needed = (remaining + per_page - 1) // per_page
+        total = data1.get("total", 0)
+        max_page = min(20, (total + per_page - 1) // per_page) if total > 0 else 20
+        last_page = min(start_page + pages_needed, max_page)
+
+        if last_page <= start_page:
             return
 
         tasks = [
             self._fetch_search_page(g, match_kw, fid, stid, p, "post")
-            for p in range(2, total_pages + 1)
+            for p in range(start_page + 1, last_page + 1)
         ]
         pages = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -162,7 +168,6 @@ class Query:
 
     async def _fetch_search_page(self, g: dict, match_kw: str, fid, stid, page: int,
                                   mode: str) -> dict | None:
-        """抓取单页搜索结果。"""
         try:
             if mode == "thread":
                 if fid or stid:
@@ -174,26 +179,22 @@ class Query:
                     return await self.crawler.global_search(match_kw, page)
             else:
                 if fid or stid:
-                    data = await self.crawler.search_posts(
+                    return await self.crawler.search_posts(
                         int(fid) if fid else 0, match_kw, page,
                         stid=int(stid) if stid else 0,
                     )
-                else:
-                    data = await self.crawler.global_search_posts(match_kw, page)
-                return data
+                return await self.crawler.global_search_posts(match_kw, page)
         except Exception:
             return None
 
     def _store_threads(self, threads: list):
-        """将主题搜索结果写入 DB。"""
-        thread_dicts = [{
+        self.store.upsert_thread_posts([{
             "pid": t.tid, "tid": t.tid, "fid": t.fid,
             "authorid": t.authorid, "author": t.author,
             "subject": t.subject, "content": t.subject,
             "post_time": t.post_time, "reply_count": t.reply_count,
             "fetch_state": 1,
-        } for t in threads]
-        self.store.upsert_thread_posts(thread_dicts)
+        } for t in threads])
 
     def _collect_threads(self, threads: list, all_results: list[SearchResult]):
         for t in threads:

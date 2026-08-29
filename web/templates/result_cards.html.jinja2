@@ -1,0 +1,15 @@
+{% for r in results %}
+<div class="waterfall-item" data-tid="{{ r.tid }}">
+  <a href="/thread/{{ r.tid }}{% if r.pid > 0 %}#pid-{{ r.pid }}{% endif %}" class="item-title" style="display:block;text-decoration:none;color:inherit;cursor:pointer;">{{ r.subject }}</a>
+  <div class="item-meta">
+    <span><i class="fa-solid fa-user"></i> {{ r.author }}</span>
+    <span><i class="fa-solid fa-folder"></i> {{ r.fname or ('fid=' ~ r.fid) }}</span>
+    <span><i class="fa-solid fa-comment"></i> {{ r.reply_count }}</span>
+    <span><i class="fa-solid fa-clock"></i> {{ r.post_time | format_time }}</span>
+  </div>
+  {% if r.snippet %}<div class="item-snippet">{{ r.snippet[:200] }}</div>{% endif %}
+  <div class="item-actions">
+    <button class="btn btn-sm fav-btn" data-tid="{{ r.tid }}" data-subject="{{ r.subject }}" data-author="{{ r.author }}"><i class="fa-regular fa-star"></i> 收藏</button>
+  </div>
+</div>
+{% endfor %}

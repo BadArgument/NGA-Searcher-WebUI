@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from ..crawler import Crawler
 from ..models import SearchParams
@@ -10,6 +10,7 @@ from ..query import Query
 from ..schemas import SearchRequest
 from ..search_task import SearchTaskManager
 from ..store import Store
+from ..template_engine import get_env
 
 router = APIRouter(prefix="/api", tags=["search"])
 
@@ -36,7 +37,6 @@ async def api_search(request: Request, body: SearchRequest):
         )
         results = await query.search(params)
 
-        # 查询任务状态
         total = len(results)
         has_more = False
         if body.source.value == "online":
@@ -45,10 +45,8 @@ async def api_search(request: Request, body: SearchRequest):
             task = tm.get_task(groups)
             if task:
                 total = task.total_collected()
-                # has_more: 任务还在跑 或 还有更多已收集结果可翻页
                 has_more = not task.is_done() or (body.offset + body.limit) < total
         else:
-            # 离线搜索：结果数 >= limit 时认为还有更多
             has_more = len(results) >= body.limit
 
         return JSONResponse({
@@ -65,3 +63,13 @@ async def api_search(request: Request, body: SearchRequest):
         })
     finally:
         store.close()
+
+
+@router.post("/render")
+async def api_render(request: Request):
+    """纯渲染：接收结果列表，返回 HTML。"""
+    body = await request.json()
+    items = body.get("results", [])
+    env = get_env()
+    html = env.get_template("result_cards.html.jinja2").render(results=items)
+    return HTMLResponse(html)

@@ -1,6 +1,7 @@
 """导出 API 路由。"""
 from __future__ import annotations
 
+import asyncio
 import re
 from urllib.parse import quote
 
@@ -8,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
 from .. import data_dir
+from ..crawler import Crawler
 from ..export import export_posts, ubb_to_html
 from ..store import Store
 
@@ -29,7 +31,23 @@ async def api_export(tid: int, format: str = "html"):
         raise HTTPException(400, "格式仅支持 html|ubb")
 
     store = Store()
+    crawler = Crawler()
     try:
+        # 导出前抓取全部帖子，确保导出完整内容
+        try:
+            total_pages = await crawler.get_post_total_pages(tid)
+            tasks = [crawler.get_posts(tid, p) for p in range(1, total_pages + 1)]
+            pages = await asyncio.gather(*tasks, return_exceptions=True)
+            for data in pages:
+                if isinstance(data, Exception) or not data:
+                    continue
+                posts_list = data.get("posts", [])
+                if posts_list:
+                    store.upsert_posts(posts_list)
+            store.sync_users_from_posts()
+        except Exception:
+            pass  # 抓取失败时使用已有数据
+
         posts = store.get_posts(tid)
         thread = store.get_thread(tid)
         title = thread["subject"] if thread else f"tid={tid}"

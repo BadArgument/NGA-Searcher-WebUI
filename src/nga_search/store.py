@@ -53,6 +53,8 @@ CREATE INDEX IF NOT EXISTS idx_posts_tid ON posts(tid);
 CREATE INDEX IF NOT EXISTS idx_posts_fid ON posts(fid);
 CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author);
 CREATE INDEX IF NOT EXISTS idx_posts_post_time ON posts(post_time);
+CREATE INDEX IF NOT EXISTS idx_posts_fid_topic ON posts(fid, is_topic);
+CREATE INDEX IF NOT EXISTS idx_posts_topic_time ON posts(is_topic, post_time);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
 CREATE TABLE IF NOT EXISTS thread_access (
@@ -114,18 +116,18 @@ class Store:
     # ---------- 帖子写入 ----------
     def upsert_thread_posts(self, threads: list[dict], commit: bool = True):
         """写入主题帖（is_topic=1）。"""
-        for t in threads:
-            self.conn.execute(
+        if threads:
+            self.conn.executemany(
                 "INSERT INTO posts(pid,tid,fid,authorid,author,subject,content,"
                 " post_time,floor,is_topic,reply_count,fetch_state)"
                 " VALUES(?,?,?,?,?,?,?,?,?,1,?,?)"
                 " ON CONFLICT(pid) DO UPDATE SET"
                 " subject=excluded.subject, reply_count=excluded.reply_count,"
                 " fetch_state=excluded.fetch_state",
-                (t["pid"], t["tid"], t["fid"], t.get("authorid", 0),
-                 t.get("author", ""), t.get("subject", ""), t.get("content", ""),
-                 t.get("post_time", 0), 0, t.get("reply_count", 0),
-                 t.get("fetch_state", 0)),
+                [(t["pid"], t["tid"], t["fid"], t.get("authorid", 0),
+                  t.get("author", ""), t.get("subject", ""), t.get("content", ""),
+                  t.get("post_time", 0), 0, t.get("reply_count", 0),
+                  t.get("fetch_state", 0)) for t in threads],
             )
         if threads:
             users = list({(t.get("authorid", 0), t.get("author", ""))
@@ -140,17 +142,17 @@ class Store:
         主题行（is_topic=1，NGA 原始楼主 pid 为 0）统一以 pid=tid 存储，
         与版面爬取写入的主题行主键一致，避免产生 pid=0 的重复主题行脏数据。
         """
-        for p in posts:
-            pid = p.tid if getattr(p, "is_topic", 0) else p.pid
-            self.conn.execute(
+        if posts:
+            self.conn.executemany(
                 "INSERT INTO posts(pid,tid,fid,authorid,author,subject,content,"
                 " post_time,floor,is_topic)"
                 " VALUES(?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(pid) DO UPDATE SET content=excluded.content,"
                 " floor=excluded.floor, subject=excluded.subject,"
                 " post_time=excluded.post_time",
-                (pid, p.tid, p.fid, p.authorid, p.author, p.subject,
-                 p.content, p.post_time, p.floor, p.is_topic),
+                [(p.tid if getattr(p, "is_topic", 0) else p.pid,
+                  p.tid, p.fid, p.authorid, p.author, p.subject,
+                  p.content, p.post_time, p.floor, p.is_topic) for p in posts],
             )
         if posts:
             users = list({(p.authorid, p.author) for p in posts})
@@ -301,7 +303,8 @@ class Store:
         where = " OR ".join(group_clauses)
 
         search_sql = (
-            f"SELECT DISTINCT p.* FROM posts p "
+            f"SELECT p.*, COALESCE(b.name, '') AS fname "
+            f"FROM posts p LEFT JOIN boards b ON p.fid = b.fid "
             f"WHERE ({where})"
             f" ORDER BY {order} LIMIT ? OFFSET ?"
         )
@@ -311,17 +314,11 @@ class Store:
 
         results = []
         for r in rows:
-            fname = ""
-            brow = self.conn.execute(
-                "SELECT name FROM boards WHERE fid=?", (r["fid"],)).fetchone()
-            if brow:
-                fname = brow["name"] or ""
-
             results.append({
                 "tid": r["tid"],
                 "pid": r["pid"],
                 "fid": r["fid"],
-                "fname": fname,
+                "fname": r["fname"] or "",
                 "authorid": r["authorid"],
                 "author": r["author"],
                 "subject": r["subject"] or "",

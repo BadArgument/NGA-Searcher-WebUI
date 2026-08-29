@@ -55,7 +55,6 @@ let currentPage = 0;
 let isLoading = false;
 let isFav = {{ 'true' if is_favorite else 'false' }};
 let hasMore = true;
-let backoffDelay = 0;
 
 // 按滚动加载：IntersectionObserver 监听 indicator 进入视口
 const loadObserver = new IntersectionObserver((entries) => {
@@ -72,10 +71,7 @@ async function loadNextPage() {
   indicator.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 加载中...';
   indicator.style.display = 'block';
 
-  // 指数退避
-  if (backoffDelay > 0) {
-    await new Promise(r => setTimeout(r, backoffDelay));
-  }
+  // 无退避延迟，服务端 Crawler 已有频率控制
 
   currentPage++;
   try {
@@ -99,11 +95,9 @@ async function loadNextPage() {
       if (searchInput && searchInput.value.trim()) {
         searchFloors();
       }
-      backoffDelay = backoffDelay === 0 ? 500 : Math.min(backoffDelay * 2, 8000);
     }
   } catch (e) {
     currentPage--;
-    backoffDelay = backoffDelay === 0 ? 1000 : Math.min(backoffDelay * 2, 16000);
   }
   isLoading = false;
   if (!hasMore) {

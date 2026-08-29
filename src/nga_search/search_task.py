@@ -9,7 +9,6 @@ from .crawler import Crawler
 from .models import SearchResult
 from .store import DB_PATH, Store, _snippet
 
-# 共享 Crawler（所有任务共用，TokenBucket 线程安全）
 _SHARED_CRAWLER: Crawler | None = None
 
 
@@ -21,17 +20,19 @@ def _get_shared_crawler() -> Crawler:
 
 
 def _make_key(groups: list[dict]) -> str:
-    """生成搜索任务唯一键。"""
-    payload = json.dumps(groups, sort_keys=True, ensure_ascii=False, default=str)
-    return payload
+    return json.dumps(groups, sort_keys=True, ensure_ascii=False, default=str)
 
 
 class SearchTask:
-    """一个搜索任务：异步并行爬取 NGA 多页，写入 DB，收集结果。"""
+    """一个搜索任务：异步并行爬取 NGA 多页，写入 DB，收集结果。
+
+    支持 thread 和 post 两种搜索模式。
+    """
 
     def __init__(self, key: str, groups: list[dict]):
         self.key = key
         self.groups = groups
+        self.search_mode = groups[0].get("search_mode", "thread") if groups else "thread"
         self.crawler = _get_shared_crawler()
         self._results: list[SearchResult] = []
         self._running = False
@@ -42,7 +43,6 @@ class SearchTask:
         self._bg_tasks: list[asyncio.Task] = []
 
     async def start(self):
-        """启动后台爬取。首页同步抓取，剩余页并行。"""
         if self._running:
             return
         self._running = True
@@ -54,16 +54,21 @@ class SearchTask:
             fid = g.get("fid")
             stid = g.get("stid")
 
-            # 首页同步抓取
             data1 = await self._fetch_page(g, match_kw, fid, stid, 1)
-            if not data1 or not data1.get("threads"):
+            if not data1:
                 continue
 
-            threads1 = data1["threads"]
-            self._store_and_collect(threads1)
+            if self.search_mode == "thread":
+                if not data1.get("threads"):
+                    continue
+            else:
+                if not data1.get("posts") and not data1.get("threads"):
+                    continue
 
+            self._store_and_collect(data1)
+
+            per_page = self._per_page(data1)
             total = data1.get("total", 0)
-            per_page = len(threads1)
             if total <= per_page:
                 self._done.set()
                 return
@@ -73,34 +78,42 @@ class SearchTask:
                 self._done.set()
                 return
 
-            # 并行抓取剩余页
             self._pages_fetched = 1
             for page in range(2, self._total_pages + 1):
                 t = asyncio.create_task(
                     self._crawl_page(g, match_kw, fid, stid, page))
                 self._bg_tasks.append(t)
-
-            # 只处理第一个匹配组
             break
+
+    def _per_page(self, data: dict) -> int:
+        if self.search_mode == "thread":
+            return len(data.get("threads", []))
+        return len(data.get("posts") or data.get("threads") or [])
 
     async def _fetch_page(self, g: dict, match_kw: str, fid, stid, page: int) -> dict | None:
         try:
-            if fid or stid:
-                return await self.crawler.search(
-                    int(fid) if fid else 0, match_kw, page,
-                    stid=int(stid) if stid else 0,
-                )
-            else:
+            if self.search_mode == "thread":
+                if fid or stid:
+                    return await self.crawler.search(
+                        int(fid) if fid else 0, match_kw, page,
+                        stid=int(stid) if stid else 0,
+                    )
                 return await self.crawler.global_search(match_kw, page)
+            else:
+                if fid or stid:
+                    return await self.crawler.search_posts(
+                        int(fid) if fid else 0, match_kw, page,
+                        stid=int(stid) if stid else 0,
+                    )
+                return await self.crawler.global_search_posts(match_kw, page)
         except Exception:
             return None
 
     async def _crawl_page(self, g: dict, match_kw: str, fid, stid, page: int):
-        """在后台任务中抓取一页。"""
         try:
             data = await self._fetch_page(g, match_kw, fid, stid, page)
-            if data and data.get("threads"):
-                self._store_and_collect(data["threads"])
+            if data:
+                self._store_and_collect(data)
         except Exception:
             pass
         finally:
@@ -108,33 +121,69 @@ class SearchTask:
             if self._pages_fetched >= self._total_pages:
                 self._done.set()
 
-    def _store_and_collect(self, threads: list):
-        """写入 DB 并收集结果。"""
+    def _store_and_collect(self, data: dict):
+        if self.search_mode == "thread":
+            threads = data.get("threads", [])
+            if not threads:
+                return
+            self._db_store_threads(threads)
+            for t in threads:
+                self._results.append(SearchResult(
+                    tid=t.tid, pid=t.tid, fid=t.fid, fname="",
+                    authorid=t.authorid, author=t.author,
+                    subject=t.subject, snippet=_snippet(t.subject),
+                    post_time=t.post_time, reply_count=t.reply_count,
+                    floor=0, is_topic=1,
+                    url=f"https://bbs.nga.cn/read.php?tid={t.tid}",
+                ))
+        else:
+            threads = data.get("threads")
+            posts = data.get("posts")
+            if threads:
+                self._db_store_thread_dicts(threads)
+            if not posts:
+                return
+            tid_to_thread = {t["tid"]: t for t in (threads or [])}
+            for p in posts:
+                t = tid_to_thread.get(p.tid, {})
+                self._results.append(SearchResult(
+                    tid=p.tid, pid=p.pid,
+                    fid=t.get("fid", p.fid), fname="",
+                    authorid=t.get("authorid", 0),
+                    author=t.get("author", ""),
+                    subject=t.get("subject", ""),
+                    snippet=_snippet(p.content),
+                    post_time=p.post_time,
+                    reply_count=t.get("reply_count", 0),
+                    floor=0, is_topic=1,
+                    url=f"https://bbs.nga.cn/read.php?tid={p.tid}",
+                ))
+
+    def _db_store_threads(self, threads: list):
         try:
             store = Store(DB_PATH)
             try:
-                thread_dicts = [{
+                store.upsert_thread_posts([{
                     "pid": t.tid, "tid": t.tid, "fid": t.fid,
                     "authorid": t.authorid, "author": t.author,
                     "subject": t.subject, "content": t.subject,
                     "post_time": t.post_time, "reply_count": t.reply_count,
                     "fetch_state": 1,
-                } for t in threads]
-                store.upsert_thread_posts(thread_dicts)
+                } for t in threads])
             finally:
                 store.close()
         except Exception:
             pass
 
-        for t in threads:
-            self._results.append(SearchResult(
-                tid=t.tid, pid=t.tid, fid=t.fid, fname="",
-                authorid=t.authorid, author=t.author,
-                subject=t.subject, snippet=_snippet(t.subject),
-                post_time=t.post_time, reply_count=t.reply_count,
-                floor=0, is_topic=1,
-                url=f"https://bbs.nga.cn/read.php?tid={t.tid}",
-            ))
+    def _db_store_thread_dicts(self, thread_dicts: list[dict]):
+        try:
+            store = Store(DB_PATH)
+            try:
+                store.upsert_thread_posts(thread_dicts)
+            finally:
+                store.close()
+        except Exception:
+            pass
 
     def get_results(self, offset: int, limit: int) -> list[SearchResult]:
         return self._results[offset:offset + limit]
@@ -159,8 +208,6 @@ class SearchTask:
 
 
 class SearchTaskManager:
-    """全局搜索任务管理器（单例）。"""
-
     _instance: SearchTaskManager | None = None
 
     def __init__(self):

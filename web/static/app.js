@@ -10,6 +10,8 @@ const state = {
   lastSearchParams: null,
   page: null,              // 当前页面标识
   scrollObserver: null,    // 无限滚动 observer
+  prefetchCache: null,     // 预取缓存: { html, offset, hasMore }
+  prefetchLoading: false,  // 预取进行中
 };
 
 // ========== 初始化 ==========
@@ -458,8 +460,11 @@ function initSearchPage() {
   }
 }
 
+function countItems(html) {
+  return (html.match(/class="waterfall-item"/g) || []).length;
+}
+
 async function doSearch(reset) {
-  // 每组至少一个 match 关键词
   for (const g of state.filterGroups) {
     if (!g.some(f => f.type === 'match')) {
       showToast('每组至少需要一个关键词（添加匹配关键词筛选）');
@@ -470,6 +475,7 @@ async function doSearch(reset) {
   if (reset) {
     state.searchOffset = 0;
     state.searchHasMore = true;
+    state.prefetchCache = null;
   }
 
   const params = {
@@ -479,7 +485,6 @@ async function doSearch(reset) {
     offset: state.searchOffset,
   };
 
-  // 序列化分组筛选
   const hasFilters = state.filterGroups.some(g => g.length > 0);
   if (hasFilters) {
     const groups = state.filterGroups.map(g => {
@@ -510,52 +515,47 @@ async function doSearch(reset) {
     });
     const data = await res.json();
 
-    // 在线搜索：等待后台任务收集足够数据（至少 500ms）
     if (state.isOnline && reset && data.has_more) {
       await new Promise(r => setTimeout(r, 500));
     }
 
-    if (!data.results || data.results.length === 0) {
-      state.searchHasMore = !!data.has_more;
-    } else {
-      state.searchHasMore = data.has_more !== false;
-    }
-    state.searchOffset += data.results.length;
+    const results = data.results || [];
+    state.searchHasMore = data.has_more !== false;
+    state.searchOffset += results.length;
     state.searchLoading = false;
-    renderResults(data.results, reset);
+
+    const r2 = await fetch('/api/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ results: results }),
+    });
+    const html = await r2.text();
+    renderResults(html, reset);
+    if (state.searchHasMore && reset) prefetchNext();
   } catch (e) {
     state.searchLoading = false;
     showToast('搜索失败: ' + e.message);
   }
 }
 
-function renderResults(results, reset) {
+function renderResults(html, reset) {
   const area = document.getElementById('results-area');
   if (reset) {
-    if (!results.length) {
+    if (!html.trim()) {
       area.innerHTML = '<div class="card"><div class="empty-state"><div class="empty-icon"><i class="fa-solid fa-inbox"></i></div><div class="empty-text">无结果</div></div></div>';
       return;
     }
-    let html = '<div class="waterfall" id="waterfall">';
-    results.forEach(r => html += buildResultCard(r));
-    html += '</div>';
+    let wrapper = '<div class="waterfall" id="waterfall">' + html + '</div>';
     if (state.searchHasMore) {
-      html += '<div id="scroll-sentinel" style="height:60px;"><div class="bottom-loading"><i class="fa-solid fa-spinner fa-spin"></i> 加载更多...</div></div>';
+      wrapper += '<div id="scroll-sentinel" style="height:60px;"><div class="bottom-loading"><i class="fa-solid fa-spinner fa-spin"></i> 加载更多...</div></div>';
     } else {
-      html += '<div class="bottom-loading" style="opacity:0.6;">— 已显示全部结果 —</div>';
+      wrapper += '<div class="bottom-loading" style="opacity:0.6;">— 已显示全部结果 —</div>';
     }
-    area.innerHTML = html;
+    area.innerHTML = wrapper;
   } else {
     const wf = document.getElementById('waterfall');
     if (!wf) return;
-    results.forEach(r => {
-      const div = document.createElement('div');
-      div.className = 'waterfall-item';
-      div.dataset.tid = r.tid;
-      div.innerHTML = buildResultCardInner(r);
-      wf.appendChild(div);
-    });
-    // 更新 sentinel
+    wf.insertAdjacentHTML('beforeend', html);
     const sentinel = document.getElementById('scroll-sentinel');
     if (sentinel) {
       if (state.searchHasMore) {
@@ -565,21 +565,16 @@ function renderResults(results, reset) {
       }
     }
   }
-
-  // 重新绑定 sentinel
   bindScrollSentinel();
 }
 
 function bindScrollSentinel() {
-  // 断开旧 observer
   if (state.scrollObserver) {
     state.scrollObserver.disconnect();
     state.scrollObserver = null;
   }
-
   const sentinel = document.getElementById('scroll-sentinel');
   if (!sentinel || !state.searchHasMore) return;
-
   state.scrollObserver = new IntersectionObserver((entries) => {
     if (entries[0].isIntersecting && !state.searchLoading && state.searchHasMore) {
       loadMore();
@@ -588,35 +583,22 @@ function bindScrollSentinel() {
   state.scrollObserver.observe(sentinel);
 }
 
-function buildResultCard(r) {
-  return '<div class="waterfall-item" data-tid="' + r.tid + '">' +
-    buildResultCardInner(r) + '</div>';
-}
-
-function buildResultCardInner(r) {
-  var href = '/thread/' + r.tid;
-  if (r.pid > 0) {
-    href += '#pid-' + r.pid;
-  }
-  return '<a href="' + href + '" class="item-title" style="display:block;text-decoration:none;color:inherit;cursor:pointer;">' + escapeHtml(r.subject) + '</a>' +
-    '<div class="item-meta">' +
-    '<span><i class="fa-solid fa-user"></i> ' + escapeHtml(r.author) + '</span>' +
-    '<span><i class="fa-solid fa-folder"></i> ' + escapeHtml(r.fname || 'fid=' + r.fid) + '</span>' +
-    '<span><i class="fa-solid fa-comment"></i> ' + r.reply_count + '</span>' +
-    '<span><i class="fa-solid fa-clock"></i> ' + formatTime(r.post_time) + '</span>' +
-    '</div>' +
-    (r.snippet ? '<div class="item-snippet">' + escapeHtml(r.snippet).substring(0, 200) + '</div>' : '') +
-    '<div class="item-actions">' +
-    '<button class="btn btn-sm fav-btn" data-tid="' + r.tid + '" data-subject="' + escapeHtml(r.subject) + '" data-author="' + escapeHtml(r.author) + '"><i class="fa-regular fa-star"></i> 收藏</button>' +
-    '</div>';
-}
-
 async function loadMore() {
   if (state.searchLoading || !state.searchHasMore || !state.lastSearchParams) return;
+
+  if (state.prefetchCache && state.prefetchCache.offset === state.searchOffset) {
+    const cached = state.prefetchCache;
+    state.prefetchCache = null;
+    state.searchHasMore = cached.hasMore;
+    state.searchOffset += cached.count;
+    renderResults(cached.html, false);
+    if (state.searchHasMore) prefetchNext();
+    return;
+  }
+
   state.searchLoading = true;
   state.lastSearchParams.offset = state.searchOffset;
 
-  // 显示底部加载指示器
   const sentinel = document.getElementById('scroll-sentinel');
   if (sentinel) sentinel.innerHTML = '<div class="bottom-loading"><i class="fa-solid fa-spinner fa-spin"></i> 加载更多...</div>';
 
@@ -627,18 +609,53 @@ async function loadMore() {
       body: JSON.stringify(state.lastSearchParams),
     });
     const data = await res.json();
-    if (!data.results || data.results.length === 0) {
-      state.searchHasMore = !!data.has_more;
-    } else {
-      state.searchHasMore = data.has_more !== false;
-    }
-    state.searchOffset += data.results.length;
+    const results = data.results || [];
+    state.searchHasMore = data.has_more !== false;
+    state.searchOffset += results.length;
+
+    const r2 = await fetch('/api/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ results: results }),
+    });
+    const html = await r2.text();
     state.searchLoading = false;
-    renderResults(data.results, false);
+    renderResults(html, false);
+    if (state.searchHasMore) prefetchNext();
   } catch (e) {
     state.searchLoading = false;
     if (sentinel) sentinel.innerHTML = '';
   }
+}
+
+async function prefetchNext() {
+  if (state.prefetchLoading || state.prefetchCache) return;
+  state.prefetchLoading = true;
+  const params = Object.assign({}, state.lastSearchParams, { offset: state.searchOffset });
+  try {
+    const res = await fetch('/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const data = await res.json();
+    const results = data.results || [];
+    if (results.length > 0) {
+      const r2 = await fetch('/api/render', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ results: results }),
+      });
+      const html = await r2.text();
+      state.prefetchCache = {
+        html: html,
+        offset: state.searchOffset,
+        hasMore: data.has_more !== false,
+        count: results.length,
+      };
+    }
+  } catch (_) {}
+  state.prefetchLoading = false;
 }
 
 // ========== 收藏 ==========
