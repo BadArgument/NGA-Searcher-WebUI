@@ -470,12 +470,14 @@ async function doSearch(reset) {
   if (reset) {
     state.searchOffset = 0;
     state.searchHasMore = true;
+    // 在线搜索时显示加载状态
+    if (state.isOnline) showLoadingIndicator();
   }
 
   const params = {
     source: state.isOnline ? 'online' : 'offline',
     sort: document.getElementById('sort-select').value,
-    limit: 50,
+    limit: 20,
     offset: state.searchOffset,
   };
 
@@ -509,7 +511,17 @@ async function doSearch(reset) {
       body: JSON.stringify(params),
     });
     const data = await res.json();
-    if (!data.results || data.results.length === 0) state.searchHasMore = false;
+
+    // 在线搜索：等待后台任务收集足够数据（至少 500ms）
+    if (state.isOnline && reset && data.has_more) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    if (!data.results || data.results.length === 0) {
+      state.searchHasMore = !!data.has_more;
+    } else {
+      state.searchHasMore = data.has_more !== false;
+    }
     state.searchOffset += data.results.length;
     state.searchLoading = false;
     renderResults(data.results, reset);
@@ -517,6 +529,17 @@ async function doSearch(reset) {
     state.searchLoading = false;
     showToast('搜索失败: ' + e.message);
   }
+}
+
+function showLoadingIndicator() {
+  const area = document.getElementById('results-area');
+  area.innerHTML = `
+    <div class="loading-state">
+      <div class="loading-spinner"><i class="fa-solid fa-spinner fa-spin fa-2x"></i></div>
+      <div class="loading-text">正在从 NGA 抓取数据...</div>
+      <div class="loading-hint">结果将动态更新，请稍候</div>
+    </div>
+  `;
 }
 
 function renderResults(results, reset) {
@@ -528,7 +551,12 @@ function renderResults(results, reset) {
     }
     let html = '<div class="waterfall" id="waterfall">';
     results.forEach(r => html += buildResultCard(r));
-    html += '</div><div id="scroll-sentinel" style="height:60px;"></div>';
+    html += '</div>';
+    if (state.searchHasMore) {
+      html += '<div id="scroll-sentinel" style="height:60px;"><div class="bottom-loading"><i class="fa-solid fa-spinner fa-spin"></i> 加载更多...</div></div>';
+    } else {
+      html += '<div class="bottom-loading" style="opacity:0.6;">— 已显示全部结果 —</div>';
+    }
     area.innerHTML = html;
   } else {
     const wf = document.getElementById('waterfall');
@@ -540,6 +568,15 @@ function renderResults(results, reset) {
       div.innerHTML = buildResultCardInner(r);
       wf.appendChild(div);
     });
+    // 更新 sentinel
+    const sentinel = document.getElementById('scroll-sentinel');
+    if (sentinel) {
+      if (state.searchHasMore) {
+        sentinel.innerHTML = '<div class="bottom-loading"><i class="fa-solid fa-spinner fa-spin"></i> 加载更多...</div>';
+      } else {
+        sentinel.innerHTML = '<div class="bottom-loading" style="opacity:0.6;">— 已显示全部结果 —</div>';
+      }
+    }
   }
 
   // 重新绑定 sentinel
@@ -591,6 +628,11 @@ async function loadMore() {
   if (state.searchLoading || !state.searchHasMore || !state.lastSearchParams) return;
   state.searchLoading = true;
   state.lastSearchParams.offset = state.searchOffset;
+
+  // 显示底部加载指示器
+  const sentinel = document.getElementById('scroll-sentinel');
+  if (sentinel) sentinel.innerHTML = '<div class="bottom-loading"><i class="fa-solid fa-spinner fa-spin"></i> 加载更多...</div>';
+
   try {
     const res = await fetch('/api/search', {
       method: 'POST',
@@ -598,12 +640,17 @@ async function loadMore() {
       body: JSON.stringify(state.lastSearchParams),
     });
     const data = await res.json();
-    if (!data.results || data.results.length === 0) state.searchHasMore = false;
+    if (!data.results || data.results.length === 0) {
+      state.searchHasMore = !!data.has_more;
+    } else {
+      state.searchHasMore = data.has_more !== false;
+    }
     state.searchOffset += data.results.length;
     state.searchLoading = false;
     renderResults(data.results, false);
   } catch (e) {
     state.searchLoading = false;
+    if (sentinel) sentinel.innerHTML = '';
   }
 }
 

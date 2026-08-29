@@ -728,6 +728,45 @@ a:hover { color: var(--accent-hover); }
   font-size: 13px;
 }
 
+/* 搜索加载状态（首次搜索） */
+.loading-state {
+  text-align: center;
+  padding: 60px 24px;
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.loading-state .loading-spinner {
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+
+.loading-state .loading-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.loading-state .loading-hint {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 底部滚动加载指示器 */
+.bottom-loading {
+  text-align: center;
+  padding: 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.bottom-loading i {
+  margin-right: 6px;
+  color: var(--accent);
+}
+
 /* === 分页 === */
 .pagination {
   display: flex;

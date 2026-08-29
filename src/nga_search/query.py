@@ -17,9 +17,29 @@ class Query:
         """执行搜索，返回结果列表。"""
         groups = self._parse_groups(params)
 
-        # 在线：先爬取 NGA 数据，写入本地
+        # 在线搜索：后台并行爬取 + 动态更新 DB
         if params.source == "online":
-            online_results = self._crawl_groups(groups, params.limit)
+            from .search_task import SearchTaskManager
+
+            task_mgr = SearchTaskManager.get()
+
+            # 仅主题模式使用并行任务；帖子模式回退到顺序爬取
+            has_post_mode = any(
+                g.get("search_mode") == "post" for g in groups if isinstance(g, dict)
+            )
+            if not has_post_mode:
+                if params.offset == 0:
+                    # 首次搜索：启动后台任务
+                    task = task_mgr.get_or_start(groups)
+                    return task.get_results(0, params.limit)
+
+                # 翻页：从已有任务取结果
+                task = task_mgr.get_task(groups)
+                if task:
+                    return task.get_results(params.offset, params.limit)
+
+            # 帖子模式或无任务时的回退
+            online_results = self._crawl_groups(groups, params.limit, params.offset)
             if online_results is not None:
                 return online_results
 
@@ -57,14 +77,15 @@ class Query:
             group["exclude"] = params.exclude
         return [group] if group.get("match") else []
 
-    def _crawl_groups(self, groups: list[dict], limit: int = 50) -> list[SearchResult] | None:
+    def _crawl_groups(self, groups: list[dict], limit: int = 50,
+                      offset: int = 0) -> list[SearchResult] | None:
         """对每组调用 NGA API 搜索，懒抓取多页写入本地 DB。
 
-        主题模式：逐页抓取写入 DB，返回 None（走 group_search 查库）。
-        回复模式：逐页抓取线程元数据写入 DB，直接构建结果返回。
+        直接返回 NGA 搜索结果（不走 LIKE 过滤），写入 DB 供离线查询。
+        返回 None 表示退化为离线查询。
         """
         all_results: list[SearchResult] = []
-        has_post_mode = False
+        need = offset + limit  # 需要抓够 offset + limit 条才能正确切片
 
         for g in groups:
             match_kw = g.get("match", "").strip()
@@ -76,17 +97,21 @@ class Query:
 
             try:
                 if search_mode == "post":
-                    has_post_mode = True
-                    self._crawl_posts_pages(g, match_kw, fid, stid, limit, all_results)
+                    self._crawl_posts_pages(g, match_kw, fid, stid, need, all_results)
                 else:
-                    self._crawl_thread_pages(g, match_kw, fid, stid, limit)
+                    self._crawl_thread_pages(g, match_kw, fid, stid, need, all_results)
             except Exception:
                 continue
 
-        return all_results if has_post_mode else None
+        if not all_results:
+            return None
 
-    def _crawl_thread_pages(self, g: dict, match_kw: str, fid, stid, limit: int):
-        """逐页抓取主题搜索结果，写入 DB。"""
+        # 处理分页：跳过 offset 条，截取 limit 条
+        return all_results[offset:offset + limit]
+
+    def _crawl_thread_pages(self, g: dict, match_kw: str, fid, stid, limit: int,
+                            all_results: list[SearchResult]):
+        """逐页抓取主题搜索结果，写入 DB 并构建结果。"""
         stored = 0
         for page in range(1, 20):  # 最多 20 页
             if fid or stid:
@@ -109,6 +134,16 @@ class Query:
                 "fetch_state": 1,
             } for t in threads]
             self.store.upsert_thread_posts(thread_dicts)
+
+            for t in threads:
+                all_results.append(SearchResult(
+                    tid=t.tid, pid=t.tid, fid=t.fid, fname="",
+                    authorid=t.authorid, author=t.author,
+                    subject=t.subject, snippet=_snippet(t.subject),
+                    post_time=t.post_time, reply_count=t.reply_count,
+                    floor=0, is_topic=1,
+                    url=f"https://bbs.nga.cn/read.php?tid={t.tid}",
+                ))
             stored += len(threads)
 
             if stored >= limit:
