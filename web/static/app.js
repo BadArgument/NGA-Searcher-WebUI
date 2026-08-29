@@ -9,6 +9,7 @@ const state = {
   searchLoading: false,
   lastSearchParams: null,
   page: null,              // 当前页面标识
+  scrollObserver: null,    // 无限滚动 observer
 };
 
 // ========== 初始化 ==========
@@ -302,6 +303,7 @@ function initSearchPage() {
     input.addEventListener('input', function() {
       var val = input.value;
       var prefix = detectPrefix(val);
+      activeIdx = -1;  // 重置高亮，避免残留选中
 
       if (prefix) {
         // 已输入完整前缀，显示对应补全 UI
@@ -526,7 +528,7 @@ function renderResults(results, reset) {
     }
     let html = '<div class="waterfall" id="waterfall">';
     results.forEach(r => html += buildResultCard(r));
-    html += '</div><div id="scroll-sentinel"></div>';
+    html += '</div><div id="scroll-sentinel" style="height:60px;"></div>';
     area.innerHTML = html;
   } else {
     const wf = document.getElementById('waterfall');
@@ -541,15 +543,25 @@ function renderResults(results, reset) {
   }
 
   // 重新绑定 sentinel
-  const sentinel = document.getElementById('scroll-sentinel');
-  if (sentinel && state.searchHasMore) {
-    const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && !state.searchLoading && state.searchHasMore) {
-        loadMore();
-      }
-    }, { rootMargin: '300px' });
-    observer.observe(sentinel);
+  bindScrollSentinel();
+}
+
+function bindScrollSentinel() {
+  // 断开旧 observer
+  if (state.scrollObserver) {
+    state.scrollObserver.disconnect();
+    state.scrollObserver = null;
   }
+
+  const sentinel = document.getElementById('scroll-sentinel');
+  if (!sentinel || !state.searchHasMore) return;
+
+  state.scrollObserver = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting && !state.searchLoading && state.searchHasMore) {
+      loadMore();
+    }
+  }, { rootMargin: '300px' });
+  state.scrollObserver.observe(sentinel);
 }
 
 function buildResultCard(r) {
