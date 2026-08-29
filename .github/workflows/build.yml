@@ -17,14 +17,17 @@ jobs:
             runs_on: macos-latest
             arch: arm64
             ext: ""
+            compress: "tar.gz"
           - os: Windows-x86_64
             runs_on: windows-latest
             arch: x86_64
             ext: ".exe"
+            compress: "zip"
           - os: Linux-x86_64
             runs_on: ubuntu-latest
             arch: x86_64
             ext: ""
+            compress: "tar.gz"
 
     steps:
       - uses: actions/checkout@v4
@@ -45,22 +48,28 @@ jobs:
       - name: Build with PyInstaller
         run: uv run python build.py
 
-      - name: Make executable
+      - name: Make executable (non-Windows)
         if: matrix.os != 'Windows-x86_64'
         run: chmod +x dist/nga-search
 
-      - name: Set artifact name
-        id: artifact
+      - name: Compress
         shell: bash
         run: |
-          echo "name=nga-search-${{ matrix.os }}" >> "$GITHUB_OUTPUT"
-          echo "binary=dist/nga-search${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
+          cd dist
+          if [ "${{ matrix.compress }}" = "tar.gz" ]; then
+            tar czf "nga-search-${{ matrix.os }}.tar.gz" nga-search
+            echo "asset=dist/nga-search-${{ matrix.os }}.tar.gz" >> "$GITHUB_OUTPUT"
+          else
+            zip "nga-search-${{ matrix.os }}.zip" nga-search.exe
+            echo "asset=dist/nga-search-${{ matrix.os }}.zip" >> "$GITHUB_OUTPUT"
+          fi
+        id: compress
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.artifact.outputs.name }}
-          path: ${{ steps.artifact.outputs.binary }}
+          name: nga-search-${{ matrix.os }}
+          path: ${{ steps.compress.outputs.asset }}
           if-no-files-found: error
 
   release:
@@ -78,19 +87,7 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release
-          for dir in artifacts/*/; do
-            name=$(basename "$dir")
-            for f in "$dir"/*; do
-              base=$(basename "$f")
-              ext="${base##*.}"
-              if [ "$ext" = "exe" ]; then
-                cp "$f" "release/${name}.exe"
-              else
-                cp "$f" "release/${name}"
-                chmod +x "release/${name}"
-              fi
-            done
-          done
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
           ls -lh release/
 
       - name: Create Release
