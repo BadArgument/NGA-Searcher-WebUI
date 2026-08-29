@@ -470,8 +470,6 @@ async function doSearch(reset) {
   if (reset) {
     state.searchOffset = 0;
     state.searchHasMore = true;
-    // 在线搜索时显示加载状态
-    if (state.isOnline) showLoadingIndicator();
   }
 
   const params = {
@@ -529,17 +527,6 @@ async function doSearch(reset) {
     state.searchLoading = false;
     showToast('搜索失败: ' + e.message);
   }
-}
-
-function showLoadingIndicator() {
-  const area = document.getElementById('results-area');
-  area.innerHTML = `
-    <div class="loading-state">
-      <div class="loading-spinner"><i class="fa-solid fa-spinner fa-spin fa-2x"></i></div>
-      <div class="loading-text">正在从 NGA 抓取数据...</div>
-      <div class="loading-hint">结果将动态更新，请稍候</div>
-    </div>
-  `;
 }
 
 function renderResults(results, reset) {
