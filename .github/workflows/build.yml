@@ -45,6 +45,10 @@ jobs:
       - name: Build with PyInstaller
         run: uv run python build.py
 
+      - name: Make executable
+        if: matrix.os != 'Windows-x86_64'
+        run: chmod +x dist/nga-search
+
       - name: Set artifact name
         id: artifact
         shell: bash
@@ -83,6 +87,7 @@ jobs:
                 cp "$f" "release/${name}.exe"
               else
                 cp "$f" "release/${name}"
+                chmod +x "release/${name}"
               fi
             done
           done
