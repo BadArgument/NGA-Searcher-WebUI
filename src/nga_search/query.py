@@ -19,7 +19,7 @@ class Query:
 
         # 在线：先爬取 NGA 数据，写入本地
         if params.source == "online":
-            online_results = self._crawl_groups(groups)
+            online_results = self._crawl_groups(groups, params.limit)
             if online_results is not None:
                 return online_results
 
@@ -57,11 +57,11 @@ class Query:
             group["exclude"] = params.exclude
         return [group] if group.get("match") else []
 
-    def _crawl_groups(self, groups: list[dict]) -> list[SearchResult] | None:
-        """对每组调用 NGA API 搜索，将结果写入本地 DB。
+    def _crawl_groups(self, groups: list[dict], limit: int = 50) -> list[SearchResult] | None:
+        """对每组调用 NGA API 搜索，懒抓取多页写入本地 DB。
 
-        主题模式：写入线程元数据，返回 None（走 group_search 查库）。
-        回复模式：写入线程元数据，不存回复帖（避免 floor=0），直接返回结果。
+        主题模式：逐页抓取写入 DB，返回 None（走 group_search 查库）。
+        回复模式：逐页抓取线程元数据写入 DB，直接构建结果返回。
         """
         all_results: list[SearchResult] = []
         has_post_mode = False
@@ -77,61 +77,87 @@ class Query:
             try:
                 if search_mode == "post":
                     has_post_mode = True
-                    # 回复模式：thread.php?key=...&content=8
-                    if fid or stid:
-                        data = self.crawler.search_posts(int(fid) if fid else 0, match_kw, 1, stid=int(stid) if stid else 0)
-                    else:
-                        data = self.crawler.global_search_posts(match_kw, 1)
-                    if data:
-                        # 只存线程元数据，不存回复帖（floor=0 无意义）
-                        if data.get("threads"):
-                            self.store.upsert_thread_posts(data["threads"])
-                        # 从 API 响应直接构建结果
-                        posts = data.get("posts", [])
-                        threads = data.get("threads", [])
-                        tid_to_thread = {t["tid"]: t for t in threads}
-                        for p in posts:
-                            t = tid_to_thread.get(p.tid, {})
-                            all_results.append(SearchResult(
-                                tid=p.tid, pid=p.pid,
-                                fid=t.get("fid", p.fid),
-                                fname="",
-                                authorid=t.get("authorid", 0),
-                                author=t.get("author", ""),
-                                subject=t.get("subject", ""),
-                                snippet=_snippet(p.content),
-                                post_time=p.post_time,
-                                reply_count=t.get("reply_count", 0),
-                                floor=0,
-                                is_topic=1,
-                                url=f"https://bbs.nga.cn/read.php?tid={p.tid}",
-                            ))
+                    self._crawl_posts_pages(g, match_kw, fid, stid, limit, all_results)
                 else:
-                    # 主题模式：thread.php?key=...&content=5
-                    if fid or stid:
-                        data = self.crawler.search(int(fid) if fid else 0, match_kw, 1, stid=int(stid) if stid else 0)
-                    else:
-                        data = self.crawler.global_search(match_kw, 1)
-                    if data and data.get("threads"):
-                        thread_dicts = []
-                        for t in data["threads"]:
-                            thread_dicts.append({
-                                "pid": t.tid,
-                                "tid": t.tid,
-                                "fid": t.fid,
-                                "authorid": t.authorid,
-                                "author": t.author,
-                                "subject": t.subject,
-                                "content": t.subject,
-                                "post_time": t.post_time,
-                                "reply_count": t.reply_count,
-                                "fetch_state": 1,
-                            })
-                        self.store.upsert_thread_posts(thread_dicts)
+                    self._crawl_thread_pages(g, match_kw, fid, stid, limit)
             except Exception:
                 continue
 
         return all_results if has_post_mode else None
+
+    def _crawl_thread_pages(self, g: dict, match_kw: str, fid, stid, limit: int):
+        """逐页抓取主题搜索结果，写入 DB。"""
+        stored = 0
+        for page in range(1, 20):  # 最多 20 页
+            if fid or stid:
+                data = self.crawler.search(
+                    int(fid) if fid else 0, match_kw, page,
+                    stid=int(stid) if stid else 0,
+                )
+            else:
+                data = self.crawler.global_search(match_kw, page)
+
+            threads = data.get("threads") if data else None
+            if not threads:
+                break
+
+            thread_dicts = [{
+                "pid": t.tid, "tid": t.tid, "fid": t.fid,
+                "authorid": t.authorid, "author": t.author,
+                "subject": t.subject, "content": t.subject,
+                "post_time": t.post_time, "reply_count": t.reply_count,
+                "fetch_state": 1,
+            } for t in threads]
+            self.store.upsert_thread_posts(thread_dicts)
+            stored += len(threads)
+
+            if stored >= limit:
+                break
+
+    def _crawl_posts_pages(self, g: dict, match_kw: str, fid, stid, limit: int,
+                           all_results: list[SearchResult]):
+        """逐页抓取回复搜索结果，写入线程元数据，构建结果。"""
+        stored = 0
+        for page in range(1, 20):
+            if fid or stid:
+                data = self.crawler.search_posts(
+                    int(fid) if fid else 0, match_kw, page,
+                    stid=int(stid) if stid else 0,
+                )
+            else:
+                data = self.crawler.global_search_posts(match_kw, page)
+
+            if not data:
+                break
+
+            threads = data.get("threads")
+            posts = data.get("posts")
+            if not posts and not threads:
+                break
+
+            if threads:
+                self.store.upsert_thread_posts(threads)
+
+            if posts:
+                tid_to_thread = {t["tid"]: t for t in (threads or [])}
+                for p in posts:
+                    t = tid_to_thread.get(p.tid, {})
+                    all_results.append(SearchResult(
+                        tid=p.tid, pid=p.pid,
+                        fid=t.get("fid", p.fid), fname="",
+                        authorid=t.get("authorid", 0),
+                        author=t.get("author", ""),
+                        subject=t.get("subject", ""),
+                        snippet=_snippet(p.content),
+                        post_time=p.post_time,
+                        reply_count=t.get("reply_count", 0),
+                        floor=0, is_topic=1,
+                        url=f"https://bbs.nga.cn/read.php?tid={p.tid}",
+                    ))
+                stored += len(posts)
+
+            if stored >= limit:
+                break
 
 
 def _to_result(r: dict) -> SearchResult:
