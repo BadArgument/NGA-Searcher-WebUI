@@ -28,7 +28,7 @@ def build():
     ]
     print(f"[BUILD] {' '.join(cmd)}")
     subprocess.run(cmd, cwd=str(PROJECT), check=True)
-    print("[OK] 打包完成，输出在 dist/ 目录")
+    print("[OK] Build complete, output in dist/")
 
 
 if __name__ == "__main__":
