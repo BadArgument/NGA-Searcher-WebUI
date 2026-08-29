@@ -83,9 +83,9 @@ jobs:
               base=$(basename "$f")
               ext="${base##*.}"
               if [ "$ext" = "exe" ]; then
-                cp "$f" "release/nga-search-${name}.exe"
+                cp "$f" "release/${name}.exe"
               else
-                cp "$f" "release/nga-search-${name}"
+                cp "$f" "release/${name}"
               fi
             done
           done
