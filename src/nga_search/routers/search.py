@@ -8,6 +8,7 @@ from ..crawler import Crawler
 from ..models import SearchParams
 from ..query import Query
 from ..schemas import SearchRequest
+from ..search_task import SearchTaskManager
 from ..store import Store
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -39,7 +40,6 @@ async def api_search(request: Request, body: SearchRequest):
         total = len(results)
         has_more = False
         if body.source.value == "online":
-            from ..search_task import SearchTaskManager
             tm = SearchTaskManager.get()
             groups = [g.model_dump() for g in body.groups]
             task = tm.get_task(groups)

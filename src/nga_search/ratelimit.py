@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 
 
@@ -13,7 +14,7 @@ class TokenBucket:
         self.capacity = capacity
         self.tokens = capacity
         self.updated = time.monotonic()
-        self._lock = __import__('threading').Lock()
+        self._lock = threading.Lock()
 
     async def acquire(self):
         while True:

@@ -5,6 +5,7 @@ import json
 
 from .crawler import Crawler
 from .models import SearchParams, SearchResult
+from .search_task import SearchTaskManager
 from .store import Store, _snippet
 
 
@@ -19,8 +20,6 @@ class Query:
 
         # 在线搜索：后台并行爬取 + 动态更新 DB
         if params.source == "online":
-            from .search_task import SearchTaskManager
-
             task_mgr = SearchTaskManager.get()
 
             # 仅主题模式使用并行任务；帖子模式回退到顺序爬取
