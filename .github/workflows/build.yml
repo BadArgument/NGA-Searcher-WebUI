@@ -22,7 +22,7 @@ jobs:
             runs_on: windows-latest
             arch: x86_64
             ext: ".exe"
-            compress: "zip"
+            compress: "none"
           - os: Linux-x86_64
             runs_on: ubuntu-latest
             arch: x86_64
@@ -60,8 +60,7 @@ jobs:
             tar czf "nga-search-${{ matrix.os }}.tar.gz" nga-search
             echo "asset=dist/nga-search-${{ matrix.os }}.tar.gz" >> "$GITHUB_OUTPUT"
           else
-            zip "nga-search-${{ matrix.os }}.zip" nga-search.exe
-            echo "asset=dist/nga-search-${{ matrix.os }}.zip" >> "$GITHUB_OUTPUT"
+            echo "asset=dist/nga-search${{ matrix.ext }}" >> "$GITHUB_OUTPUT"
           fi
         id: compress
 
@@ -87,7 +86,18 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec cp {} release/ \;
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            for f in "$dir"/*; do
+              base=$(basename "$f")
+              ext="${base##*.}"
+              if [ "$ext" = "exe" ]; then
+                cp "$f" "release/${name}.exe"
+              else
+                cp "$f" "release/${name}.tar.gz"
+              fi
+            done
+          done
           ls -lh release/
 
       - name: Create Release
