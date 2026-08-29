@@ -1,0 +1,49 @@
+{% extends "base.html.jinja2" %}
+{% block title %}搜索 - NGA 搜索器{% endblock %}
+{% block content %}
+
+<div class="card search-section">
+  <div class="search-options">
+    <div class="toggle-group" id="toggle-group">
+      <span>离线</span>
+      <div class="toggle-track on" id="toggle-track"></div>
+      <span>在线</span>
+    </div>
+
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <span style="font-size:13px;color:var(--muted);">排序:</span>
+      <select id="sort-select" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+        <option value="time">时间</option>
+        <option value="relevance">相关度</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="filter-panel open" id="filter-panel">
+    <div id="filter-groups"></div>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button class="btn btn-sm" id="add-group-btn">
+        <i class="fa-solid fa-plus"></i> 添加筛选组（OR）
+      </button>
+      <button class="btn btn-sm" id="refresh-data-btn" title="从 NGA 重新抓取所有已索引版面并写入数据库">
+        <i class="fa-solid fa-rotate"></i> 刷新数据
+      </button>
+      <button class="btn btn-primary" id="search-btn" style="margin-left:auto;">
+        <i class="fa-solid fa-search"></i> 搜索
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="results-area">
+  <div class="card">
+    <div class="empty-state">
+      <div class="empty-icon"><i class="fa-solid fa-filter"></i></div>
+      <div class="empty-text">添加筛选条件后搜索 NGA 帖子</div>
+      <div style="font-size:12px;color:var(--muted);">
+        每组至少一个关键词，组内 AND、组间 OR
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

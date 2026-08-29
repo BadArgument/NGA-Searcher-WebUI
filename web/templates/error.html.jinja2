@@ -1,0 +1,20 @@
+{% extends "base.html.jinja2" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="empty-state">
+    <div class="empty-icon" style="color:var(--muted);">
+      <i class="fa-solid fa-circle-exclamation"></i>
+    </div>
+    <h2 style="font-size:18px;margin-bottom:8px;">{{ title }}</h2>
+    <p style="color:var(--muted);margin-bottom:8px;">{{ message }}</p>
+    {% if hint %}
+    <p style="font-size:13px;color:#999;background:#fafafa;padding:8px 12px;border-radius:6px;display:inline-block;">{{ hint }}</p>
+    {% endif %}
+    <div style="margin-top:16px;">
+      <a href="/" class="btn">返回首页</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

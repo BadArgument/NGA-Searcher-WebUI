@@ -1,0 +1,217 @@
+{% extends "base.html.jinja2" %}
+{% block title %}{{ thread.subject if thread else "帖子" }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h1 style="font-size:18px;margin-bottom:6px;">{{ thread.subject if thread else "帖子" }}</h1>
+      <div style="color:var(--muted);font-size:13px;">
+        {{ thread.author if thread else "" }} · tid={{ tid }}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <a href="https://bbs.nga.cn/read.php?tid={{ tid }}" target="_blank" class="btn btn-sm" title="NGA 原文">
+        <i class="fa-solid fa-arrow-up-right-from-square"></i> 原链接
+      </a>
+      <button class="btn btn-sm" id="refresh-btn" onclick="refreshThread()" title="从 NGA 重新获取全部楼层">
+        <i class="fa-solid fa-rotate"></i>
+      </button>
+      <button class="btn btn-sm" id="fav-btn" onclick="toggleFav()">
+        {% if is_favorite %}<i class="fa-solid fa-star" style="color:#faad14;"></i>{% else %}<i class="fa-regular fa-star"></i>{% endif %}
+      </button>
+      <div style="position:relative;">
+        <button class="btn btn-sm" onclick="toggleExport()">
+          导出 <i class="fa-solid fa-caret-down"></i>
+        </button>
+        <div id="export-menu" style="display:none;position:absolute;top:100%;right:0;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);z-index:10;min-width:100px;">
+          <a href="/api/export/{{ tid }}?format=html" class="btn btn-sm" style="display:block;border:none;text-align:left;text-decoration:none;color:var(--text);">HTML</a>
+          <a href="/api/export/{{ tid }}?format=ubb" class="btn btn-sm" style="display:block;border:none;text-align:left;text-decoration:none;color:var(--text);">UBB 原文</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+    <input type="text" id="floor-search" placeholder="页内搜索楼层（实时筛选关键词）..." oninput="searchFloors()" style="flex:1;min-width:150px;padding:6px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+  </div>
+</div>
+
+<div id="posts-container">
+  <!-- 动态加载楼层 -->
+</div>
+
+<div id="loading-indicator" class="loading-indicator" style="display:block;">
+  <i class="fa-solid fa-spinner fa-spin"></i> 加载中...
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const tid = {{ tid }};
+let currentPage = 0;
+let isLoading = false;
+let isFav = {{ 'true' if is_favorite else 'false' }};
+let hasMore = true;
+let backoffDelay = 0;
+
+// 按滚动加载：IntersectionObserver 监听 indicator 进入视口
+const loadObserver = new IntersectionObserver((entries) => {
+  if (entries[0].isIntersecting && !isLoading && hasMore) {
+    loadNextPage();
+  }
+}, { rootMargin: '200px' });
+loadObserver.observe(document.getElementById('loading-indicator'));
+
+async function loadNextPage() {
+  if (!hasMore || isLoading) return;
+  isLoading = true;
+  const indicator = document.getElementById('loading-indicator');
+  indicator.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 加载中...';
+  indicator.style.display = 'block';
+
+  // 指数退避
+  if (backoffDelay > 0) {
+    await new Promise(r => setTimeout(r, backoffDelay));
+  }
+
+  currentPage++;
+  try {
+    const res = await fetch('/api/thread/' + tid + '/posts?page=' + currentPage);
+    const data = await res.json();
+    const posts = data.posts || [];
+    if (posts.length === 0) {
+      hasMore = false;  // 无更多楼层，停止
+    } else {
+      const container = document.getElementById('posts-container');
+      posts.forEach(p => {
+        const div = document.createElement('div');
+        div.className = 'card post';
+        div.id = 'floor-' + p.floor;
+        div.setAttribute('data-pid', p.pid);
+        div.innerHTML = '<div class="post-header" style="display:flex;justify-content:space-between;align-items:center;"><div><strong>#' + p.floor + '</strong> · ' + escapeHtml(p.author) + ' · ' + formatTime(p.post_time) + '</div><a href="#floor-' + p.floor + '" class="btn btn-sm" onclick="goToFloor(' + p.floor + ');return false;" title="复制本层链接" style="font-size:18px;padding:2px 8px;line-height:1;font-weight:700;">#</a></div><div class="post-content">' + p.content + '</div>';
+        container.appendChild(div);
+      });
+      // 搜索框非空时对新加载的楼层也进行筛选
+      const searchInput = document.getElementById('floor-search');
+      if (searchInput && searchInput.value.trim()) {
+        searchFloors();
+      }
+      backoffDelay = backoffDelay === 0 ? 500 : Math.min(backoffDelay * 2, 8000);
+    }
+  } catch (e) {
+    currentPage--;
+    backoffDelay = backoffDelay === 0 ? 1000 : Math.min(backoffDelay * 2, 16000);
+  }
+  isLoading = false;
+  if (!hasMore) {
+    indicator.innerHTML = '已加载全部楼层';
+  } else {
+    indicator.innerHTML = '';
+  }
+  indicator.style.display = 'block';
+}
+
+async function refreshThread() {
+  const btn = document.getElementById('refresh-btn');
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+  btn.disabled = true;
+  try {
+    await fetch('/api/thread/' + tid + '/refresh', { method: 'POST' });
+    location.reload();
+  } catch (e) {
+    alert('刷新失败: ' + e);
+    btn.innerHTML = '<i class="fa-solid fa-rotate"></i>';
+    btn.disabled = false;
+  }
+}
+
+async function toggleFav() {
+  if (isFav) {
+    await fetch('/api/favorites/' + tid, { method: 'DELETE' });
+  } else {
+    await fetch('/api/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tid: tid, subject: "{{ thread.subject if thread else '' }}", author: "{{ thread.author if thread else '' }}" }),
+    });
+  }
+  isFav = !isFav;
+  document.getElementById('fav-btn').innerHTML = isFav ? '<i class="fa-solid fa-star" style="color:#faad14;"></i>' : '<i class="fa-regular fa-star"></i>';
+}
+
+function toggleExport() {
+  const menu = document.getElementById('export-menu');
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+
+function searchFloors() {
+  const q = document.getElementById('floor-search').value.toLowerCase();
+  document.querySelectorAll('.post').forEach(el => {
+    el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+function goToFloor(n) {
+  const el = document.getElementById('floor-' + n);
+  if (!el) return;
+  location.hash = 'floor-' + n;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  el.style.transition = 'background 0.6s';
+  el.style.background = 'var(--bg-2, #f0f1f3)';
+  setTimeout(() => { el.style.background = ''; }, 1500);
+}
+
+// 页面加载时若 URL 带 #floor-N 或 #pid-N 则轮询滚动到该层
+(function() {
+  const hash = location.hash;
+  if (hash && hash.startsWith('#floor-')) {
+    const n = Number(hash.slice(7));
+    if (n) {
+      let attempts = 0;
+      const tryScroll = setInterval(() => {
+        const el = document.getElementById('floor-' + n);
+        if (el) {
+          clearInterval(tryScroll);
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          el.style.transition = 'background 0.6s';
+          el.style.background = 'var(--bg-2, #f0f1f3)';
+          setTimeout(() => { el.style.background = ''; }, 1500);
+        } else if (++attempts > 20) {
+          clearInterval(tryScroll);
+        }
+      }, 300);
+    }
+  } else if (hash && hash.startsWith('#pid-')) {
+    const pid = Number(hash.slice(5));
+    if (pid) {
+      let attempts = 0;
+      const tryScroll = setInterval(() => {
+        const el = document.querySelector('[data-pid="' + pid + '"]');
+        if (el) {
+          clearInterval(tryScroll);
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          el.style.transition = 'background 0.6s';
+          el.style.background = 'var(--bg-2, #f0f1f3)';
+          setTimeout(() => { el.style.background = ''; }, 1500);
+        } else if (++attempts > 20) {
+          clearInterval(tryScroll);
+        }
+      }, 300);
+    }
+  }
+})();
+
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+
+// 初始加载第一页
+loadNextPage();
+</script>
+{% endblock %}

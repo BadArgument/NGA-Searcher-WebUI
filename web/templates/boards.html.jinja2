@@ -1,0 +1,48 @@
+{% extends "base.html.jinja2" %}
+{% block title %}版面 - NGA 搜索器{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+    <h2 style="font-size:16px;"><i class="fa-solid fa-layer-group"></i> 版面列表</h2>
+    <div style="display:flex;gap:8px;align-items:center;">
+      {% if not has_boards %}
+      <button class="btn btn-primary" id="fetch-boards-btn">
+        <i class="fa-solid fa-download"></i> 从 NGA 获取版面列表
+      </button>
+      {% else %}
+      <input type="text" id="board-search" placeholder="搜索版面..." style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px;width:200px;">
+      <button class="btn btn-sm" id="fetch-boards-btn" title="刷新版面列表">
+        <i class="fa-solid fa-rotate"></i>
+      </button>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if has_boards %}
+  {% for parent_name, subs in board_groups.items() %}
+  <div class="board-section" style="margin-bottom:20px;">
+    <h3 style="font-size:14px;color:var(--accent);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border);">
+      <i class="fa-solid fa-folder"></i> {{ parent_name or '未分类' }}
+    </h3>
+    <div class="board-grid">
+      {% for b in subs %}
+      <a href="/board/{{ b.fid }}" class="board-card">
+        <div class="board-name">{{ b.name }}</div>
+        {% if b.description %}
+        <div class="board-desc">{{ b.description }}</div>
+        {% endif %}
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon"><i class="fa-solid fa-folder-open"></i></div>
+    <div class="empty-text">本地暂无版面数据</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">初次启动需从 NGA 获取版面列表，之后即可离线浏览</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

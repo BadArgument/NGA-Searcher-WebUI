@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+{{ css | safe }}
+</style>
+</head>
+<body>
+<main class="main-content">
+  <div class="card">
+    <h1 style="font-size:18px;margin-bottom:6px;">{{ title }}</h1>
+    <div style="color:var(--muted);font-size:13px;">{{ author }} · tid={{ tid }}</div>
+  </div>
+
+  <div id="posts-container">
+    {% for p in posts %}
+    <div class="card post">
+      <div class="post-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <div><strong>#{{ p.floor }}</strong> · {{ p.author }} · {{ p.post_time_str }}</div>
+      </div>
+      <div class="post-content">{{ p.content | safe }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</main>
+</body>
+</html>

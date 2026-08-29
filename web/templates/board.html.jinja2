@@ -1,0 +1,149 @@
+{% extends "base.html.jinja2" %}
+{% block title %}{{ forum.get('name', board.name if board else '版面') }}{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
+    <div>
+      <h1 style="font-size:18px;margin-bottom:4px;">
+        {{ forum.get('name', board.name if board else '版面') }}
+      </h1>
+      <div style="color:var(--muted);font-size:13px;">
+        fid={{ forum.get('fid', board.fid if board else 0) }}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-sm" id="board-refresh-btn" onclick="refreshBoard()" title="从 NGA 重新抓取本版面数据并写入数据库">
+        <i class="fa-solid fa-rotate"></i> 刷新
+      </button>
+    </div>
+  </div>
+</div>
+
+{% if stale %}
+<div class="card" style="background:#fffbe6;border:1px solid #ffe58f;margin-bottom:12px;">
+  <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#ad6800;">
+    <i class="fa-solid fa-triangle-exclamation"></i>
+    <span>在线抓取失败，当前展示本地缓存数据（可能不是最新）。<span id="stale-countdown">30 秒后自动重试</span>…</span>
+  </div>
+</div>
+{% endif %}
+
+{% if sub_forums %}
+<div class="card">
+  <h3 style="font-size:14px;margin-bottom:12px;color:var(--muted);">
+    <i class="fa-solid fa-folder-tree"></i> 子版面
+  </h3>
+  <div class="board-grid">
+    {% for sf in sub_forums %}
+    <a href="{% if sf.is_stid %}/board/{{ forum.get('fid', board.fid if board else 0) }}?stid={{ sf.stid }}{% else %}/board/{{ sf.fid }}{% endif %}" class="board-card">
+      <div class="board-name">{{ sf.name }}</div>
+      {% if sf.description %}
+      <div class="board-desc">{{ sf.description }}</div>
+      {% endif %}
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  {% if threads %}
+  <div class="waterfall" id="board-waterfall">
+    {% for t in threads %}
+    <div class="waterfall-item" onclick="location.href='/thread/{{ t.tid }}'">
+      <div class="item-title">{{ t.subject }}</div>
+      <div class="item-meta">
+        {% if t.author %}<span><i class="fa-solid fa-user"></i> {{ t.author }}</span>{% endif %}
+        {% if t.reply_count is defined %}<span><i class="fa-solid fa-comment"></i> {{ t.reply_count }}</span>{% endif %}
+        {% if t.post_time %}<span><i class="fa-solid fa-clock"></i> {{ t.post_time|format_time }}</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <div id="board-sentinel" style="height:20px;"></div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon"><i class="fa-solid fa-inbox"></i></div>
+    <div class="empty-text">暂无主题</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if stale %}
+<script>
+(function() {
+  let sec = 30;
+  const el = document.getElementById('stale-countdown');
+  const timer = setInterval(() => {
+    sec--;
+    if (el) el.textContent = sec + ' 秒后自动重试';
+    if (sec <= 0) { clearInterval(timer); location.reload(); }
+  }, 1000);
+})();
+</script>
+{% endif %}
+<script>
+async function refreshBoard() {
+  const btn = document.getElementById('board-refresh-btn');
+  const fid = {{ forum.get('fid', board.fid if board else 0) }};
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 刷新中...';
+  try {
+    await fetch('/api/index/board/' + fid, { method: 'POST' });
+    location.reload();
+  } catch (e) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新';
+    alert('刷新失败: ' + e.message);
+  }
+}
+</script>
+{% if threads %}
+<script>
+(function() {
+  const fid = {{ forum.get('fid', board.fid if board else 0) }};
+  const stid = {{ stid }};
+  let page = 1;
+  let loading = false;
+
+  const sentinel = document.getElementById('board-sentinel');
+  const waterfall = document.getElementById('board-waterfall');
+
+  function buildCard(t) {
+    const div = document.createElement('div');
+    div.className = 'waterfall-item';
+    div.onclick = function() { location.href = '/thread/' + t.tid; };
+    let meta = '';
+    if (t.author) meta += '<span><i class="fa-solid fa-user"></i> ' + escapeHtml(t.author) + '</span>';
+    if (t.reply_count !== undefined) meta += '<span><i class="fa-solid fa-comment"></i> ' + t.reply_count + '</span>';
+    if (t.post_time) meta += '<span><i class="fa-solid fa-clock"></i> ' + formatTime(t.post_time) + '</span>';
+    div.innerHTML = '<div class="item-title">' + escapeHtml(t.subject) + '</div>' +
+      '<div class="item-meta">' + meta + '</div>';
+    return div;
+  }
+
+  const observer = new IntersectionObserver(async (entries) => {
+    if (!entries[0].isIntersecting || loading) return;
+    loading = true;
+    page++;
+    try {
+      const res = await fetch('/api/boards/' + fid + '?page=' + page + (stid ? '&stid=' + stid : ''));
+      const data = await res.json();
+      const threads = data && data.threads ? data.threads : [];
+      if (threads.length > 0) {
+        threads.forEach(t => waterfall.appendChild(buildCard(t)));
+      } else {
+        if (sentinel) observer.unobserve(sentinel);  // 无更多数据，停止加载
+      }
+    } catch (e) { if (sentinel) observer.unobserve(sentinel); }
+    loading = false;
+  }, { rootMargin: '300px' });
+
+  if (sentinel) observer.observe(sentinel);
+})();
+</script>
+{% endif %}
+{% endblock %}

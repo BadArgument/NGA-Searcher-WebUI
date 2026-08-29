@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}NGA 搜索器{% endblock %}</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link rel="stylesheet" href="/static/style.css">
+{% block head %}{% endblock %}
+</head>
+<body data-page="{{ active_page or '' }}">
+<nav class="topbar">
+  <a href="javascript:history.back()" class="nav-link" title="返回上一页" style="margin-right:4px;"><i class="fa-solid fa-arrow-left"></i></a>
+  <a href="/" class="brand"><i class="fa-solid fa-magnifying-glass"></i> NGA 搜索器</a>
+  <div class="nav-links">
+    <a href="/favorites" class="nav-link" data-page="favorites">
+      <i class="fa-solid fa-star"></i> 收藏
+    </a>
+    <a href="/boards" class="nav-link" data-page="boards">
+      <i class="fa-solid fa-layer-group"></i> 版面
+    </a>
+    <a href="/" class="nav-link" data-page="search">
+      <i class="fa-solid fa-magnifying-glass"></i> 搜索
+    </a>
+  </div>
+</nav>
+
+<main class="main-content">
+{% block content %}{% endblock %}
+</main>
+
+<script src="/static/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

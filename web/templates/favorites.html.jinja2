@@ -1,0 +1,62 @@
+{% extends "base.html.jinja2" %}
+{% block title %}收藏 - NGA 搜索器{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+    <h2 style="font-size:16px;margin:0;"><i class="fa-solid fa-star" style="color:#faad14;"></i> 我的收藏</h2>
+    <button class="btn btn-sm" id="fav-refresh-btn" onclick="refreshFavorites()" title="从 NGA 重新抓取收藏帖并写入数据库">
+      <i class="fa-solid fa-rotate"></i> 刷新
+    </button>
+  </div>
+  {% if favorites %}
+  <div class="waterfall">
+    {% for f in favorites %}
+    <div class="waterfall-item" id="fav-{{ f.tid }}" onclick="location.href='/thread/{{ f.tid }}'">
+      <div class="item-title">{{ f.subject[:80] }}</div>
+      <div class="item-meta">
+        <span><i class="fa-solid fa-user"></i> {{ f.author }}</span>
+        <span><i class="fa-solid fa-clock"></i> {{ f.added_time|format_time }}</span>
+      </div>
+      <button class="btn btn-sm" onclick="event.stopPropagation();removeFav({{ f.tid }})" title="取消收藏" style="margin-top:8px;color:var(--muted);">
+        <i class="fa-solid fa-xmark"></i> 取消收藏
+      </button>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon"><i class="fa-regular fa-star"></i></div>
+    <div class="empty-text">暂无收藏</div>
+    <div style="font-size:12px;color:var(--muted);">搜索帖子后点击收藏按钮添加</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function refreshFavorites() {
+  const tids = Array.from(document.querySelectorAll('.waterfall-item'))
+    .map(el => parseInt(el.id.replace('fav-', ''), 10));
+  if (!tids.length) { alert('暂无收藏'); return; }
+  const btn = document.getElementById('fav-refresh-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 刷新中...';
+  let ok = 0, fail = 0;
+  try {
+    for (const tid of tids) {
+      try {
+        const r = await fetch('/api/thread/' + tid + '/refresh', { method: 'POST' });
+        if (r.ok) ok++; else fail++;
+      } catch (e) { fail++; }
+    }
+    alert('刷新完成: 成功 ' + ok + '，失败 ' + fail);
+    location.reload();
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-rotate"></i> 刷新';
+  }
+}
+</script>
+{% endblock %}

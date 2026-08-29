@@ -1,0 +1,15 @@
+{% extends "base.html.jinja2" %}
+{% block title %}状态 - NGA 搜索器{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h2 style="font-size:16px;margin-bottom:16px;"><i class="fa-solid fa-chart-bar"></i> 索引状态</h2>
+  <table style="width:100%;border-collapse:collapse;">
+    <tr><td style="padding:8px 0;color:var(--muted);">版面</td><td style="text-align:right;">{{ counts.boards }}</td></tr>
+    <tr><td style="padding:8px 0;color:var(--muted);">主题</td><td style="text-align:right;">{{ counts.threads }}</td></tr>
+    <tr><td style="padding:8px 0;color:var(--muted);">帖子</td><td style="text-align:right;">{{ counts.posts }}</td></tr>
+    <tr><td style="padding:8px 0;color:var(--muted);">收藏</td><td style="text-align:right;">{{ counts.favorites }}</td></tr>
+    <tr><td style="padding:8px 0;color:var(--muted);">数据库</td><td style="text-align:right;">{{ db_path }} ({{ db_size|round(1) }} MB)</td></tr>
+  </table>
+</div>
+{% endblock %}
