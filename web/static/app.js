@@ -10,8 +10,6 @@ const state = {
   lastSearchParams: null,
   page: null,              // 当前页面标识
   scrollObserver: null,    // 无限滚动 observer
-  prefetchCache: null,     // 预取缓存: { html, offset, hasMore }
-  prefetchLoading: false,  // 预取进行中
 };
 
 // ========== 初始化 ==========
@@ -460,10 +458,6 @@ function initSearchPage() {
   }
 }
 
-function countItems(html) {
-  return (html.match(/class="waterfall-item"/g) || []).length;
-}
-
 async function doSearch(reset) {
   for (const g of state.filterGroups) {
     if (!g.some(f => f.type === 'match')) {
@@ -475,7 +469,6 @@ async function doSearch(reset) {
   if (reset) {
     state.searchOffset = 0;
     state.searchHasMore = true;
-    state.prefetchCache = null;
   }
 
   const params = {
@@ -531,7 +524,6 @@ async function doSearch(reset) {
     });
     const html = await r2.text();
     renderResults(html, reset);
-    if (state.searchHasMore && reset) prefetchNext();
   } catch (e) {
     state.searchLoading = false;
     showToast('搜索失败: ' + e.message);
@@ -586,16 +578,6 @@ function bindScrollSentinel() {
 async function loadMore() {
   if (state.searchLoading || !state.searchHasMore || !state.lastSearchParams) return;
 
-  if (state.prefetchCache && state.prefetchCache.offset === state.searchOffset) {
-    const cached = state.prefetchCache;
-    state.prefetchCache = null;
-    state.searchHasMore = cached.hasMore;
-    state.searchOffset += cached.count;
-    renderResults(cached.html, false);
-    if (state.searchHasMore) prefetchNext();
-    return;
-  }
-
   state.searchLoading = true;
   state.lastSearchParams.offset = state.searchOffset;
 
@@ -621,41 +603,10 @@ async function loadMore() {
     const html = await r2.text();
     state.searchLoading = false;
     renderResults(html, false);
-    if (state.searchHasMore) prefetchNext();
   } catch (e) {
     state.searchLoading = false;
     if (sentinel) sentinel.innerHTML = '';
   }
-}
-
-async function prefetchNext() {
-  if (state.prefetchLoading || state.prefetchCache) return;
-  state.prefetchLoading = true;
-  const params = Object.assign({}, state.lastSearchParams, { offset: state.searchOffset });
-  try {
-    const res = await fetch('/api/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    const data = await res.json();
-    const results = data.results || [];
-    if (results.length > 0) {
-      const r2 = await fetch('/api/render', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ results: results }),
-      });
-      const html = await r2.text();
-      state.prefetchCache = {
-        html: html,
-        offset: state.searchOffset,
-        hasMore: data.has_more !== false,
-        count: results.length,
-      };
-    }
-  } catch (_) {}
-  state.prefetchLoading = false;
 }
 
 // ========== 收藏 ==========

@@ -56,6 +56,8 @@ let isLoading = false;
 let isFav = {{ 'true' if is_favorite else 'false' }};
 let hasMore = true;
 
+let searchAutoTimer = null;
+
 // 按滚动加载：IntersectionObserver 监听 indicator 进入视口
 const loadObserver = new IntersectionObserver((entries) => {
   if (entries[0].isIntersecting && !isLoading && hasMore) {
@@ -143,9 +145,25 @@ function toggleExport() {
 
 function searchFloors() {
   const q = document.getElementById('floor-search').value.toLowerCase();
+  let visible = 0;
   document.querySelectorAll('.post').forEach(el => {
-    el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none';
+    const match = el.textContent.toLowerCase().includes(q);
+    el.style.display = match ? '' : 'none';
+    if (match) visible++;
   });
+
+  // 清除之前的定时器
+  if (searchAutoTimer) { clearTimeout(searchAutoTimer); searchAutoTimer = null; }
+
+  // 如果无匹配且还有更多内容，100ms 后自动加载下一页
+  if (visible === 0 && hasMore && !isLoading && q) {
+    searchAutoTimer = setTimeout(() => {
+      const anyVisible = Array.from(document.querySelectorAll('.post')).some(el => el.style.display !== 'none');
+      if (!anyVisible && hasMore && !isLoading) {
+        loadNextPage();
+      }
+    }, 100);
+  }
 }
 
 function goToFloor(n) {
@@ -158,43 +176,32 @@ function goToFloor(n) {
   setTimeout(() => { el.style.background = ''; }, 1500);
 }
 
-// 页面加载时若 URL 带 #floor-N 或 #pid-N 则轮询滚动到该层
-(function() {
+// 页面加载时若 URL 带 #floor-N 或 #pid-N 则自动加载到该层
+(async function() {
   const hash = location.hash;
-  if (hash && hash.startsWith('#floor-')) {
+  if (!hash) return;
+
+  let selector = null;
+  if (hash.startsWith('#floor-')) {
     const n = Number(hash.slice(7));
-    if (n) {
-      let attempts = 0;
-      const tryScroll = setInterval(() => {
-        const el = document.getElementById('floor-' + n);
-        if (el) {
-          clearInterval(tryScroll);
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          el.style.transition = 'background 0.6s';
-          el.style.background = 'var(--bg-2, #f0f1f3)';
-          setTimeout(() => { el.style.background = ''; }, 1500);
-        } else if (++attempts > 20) {
-          clearInterval(tryScroll);
-        }
-      }, 300);
-    }
-  } else if (hash && hash.startsWith('#pid-')) {
+    if (n) selector = '#floor-' + n;
+  } else if (hash.startsWith('#pid-')) {
     const pid = Number(hash.slice(5));
-    if (pid) {
-      let attempts = 0;
-      const tryScroll = setInterval(() => {
-        const el = document.querySelector('[data-pid="' + pid + '"]');
-        if (el) {
-          clearInterval(tryScroll);
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          el.style.transition = 'background 0.6s';
-          el.style.background = 'var(--bg-2, #f0f1f3)';
-          setTimeout(() => { el.style.background = ''; }, 1500);
-        } else if (++attempts > 20) {
-          clearInterval(tryScroll);
-        }
-      }, 300);
-    }
+    if (pid) selector = '[data-pid="' + pid + '"]';
+  }
+  if (!selector) return;
+
+  // 加载页面直到找到目标元素
+  while (hasMore && !document.querySelector(selector)) {
+    await loadNextPage();
+  }
+
+  const el = document.querySelector(selector);
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.style.transition = 'background 0.6s';
+    el.style.background = 'var(--bg-2, #f0f1f3)';
+    setTimeout(() => { el.style.background = ''; }, 1500);
   }
 })();
 
